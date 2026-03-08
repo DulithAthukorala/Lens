@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from enum import Enum
+from typing import List, Optional
+
+from pydantic import BaseModel
+from typing_extensions import TypedDict
+
+
+class SignalTier(str, Enum):
+    TIER_1 = "tier_1"  # Visibility Failures — hard signals, high weight, always included
+    TIER_2 = "tier_2"  # Content & Social Neglect — medium signals
+    TIER_3 = "tier_3"  # Paid & Conversion Gaps — soft signals, supporting evidence
+
+
+class FailureSignal(BaseModel):
+    signal_name: str      # e.g. "PageSpeed mobile < 40"
+    tier: SignalTier
+    evidence_value: str   # e.g. "Mobile PageSpeed score: 28" — string to handle all types
+    source_url: str       # where the evidence was gathered
+    confidence: float     # 0.0–1.0 per-signal confidence
+    detail: str           # human-readable explanation
+
+
+class ResearcherOutput(BaseModel):
+    business_url: str
+    business_name: Optional[str] = None
+    industry_guess: Optional[str] = None
+    signals: List[FailureSignal]
+
+
+class CaseStudyMatch(BaseModel):
+    case_study_id: str
+    case_study_text: str
+    similarity_score: float
+    match_rationale: str
+
+
+class AnalystOutput(BaseModel):
+    top_matches: List[CaseStudyMatch]  # top-3, sorted by similarity descending
+    query_used: str
+
+
+class Pitch(BaseModel):
+    subject_line: str      # < 9 words, references a specific finding — never generic
+    opening_hook: str      # cites ONE concrete signal with its exact evidence_value
+    pain_framing: str      # why this failure matters to their business, cites evidence_value
+    proof_paragraph: str   # cites matched case study by name + specific result metrics
+    cta: str               # soft ask: 15-min call or free audit
+
+
+class WriterOutput(BaseModel):
+    pitch: Pitch
+
+
+class ValidatorOutput(BaseModel):
+    specificity_score: float     # 0.0–1.0 (LLM judge on pain_framing)
+    alignment_score: float       # 0.0–1.0 (top case study similarity score)
+    comparability_score: float   # 0.0–1.0 (cliff at 0.75 similarity)
+    composite_score: float       # weighted: 40%/40%/20%
+    passed: bool                 # composite_score >= 0.7
+    failure_reason: Optional[str] = None
+    warning_flag: bool = False   # True when max retries forced a pass
+
+
+class PipelineState(TypedDict):
+    """LangGraph state — the single source of truth flowing through all nodes."""
+    business_url: str
+    retry_count: int
+    failure_reason: Optional[str]
+    researcher_output: Optional[ResearcherOutput]
+    analyst_output: Optional[AnalystOutput]
+    writer_output: Optional[WriterOutput]
+    validator_output: Optional[ValidatorOutput]
