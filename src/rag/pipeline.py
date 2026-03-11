@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List, Optional
 
 import chromadb
+from sentence_transformers import CrossEncoder
 
 from src.models import FailureSignal
+
+log = logging.getLogger(__name__)
 
 CHROMA_PATH = Path("chroma_data")
 PRIMARY_COLLECTION = "lens_case_studies_sections"    # section-aware: Problem/Solution/Result chunks
 FALLBACK_COLLECTION = "lens_case_studies_sentences"  # fallback if primary returns low scores
+
+# Cross-encoder reranker — loaded lazily to avoid cold-start on import.
+# ms-marco-MiniLM-L-6-v2 is a lightweight cross-encoder (~23M params) trained on
+# MS MARCO passage ranking. It scores (query, document) pairs directly, giving
+# much higher precision than bi-encoder cosine similarity alone.
+_reranker: Optional[CrossEncoder] = None
+_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_RERANK_CANDIDATES = 10  # over-fetch from ChromaDB, then rerank down to top-k
+
+
+def _get_reranker() -> CrossEncoder:
+    global _reranker
+    if _reranker is None:
+        log.info("Loading cross-encoder reranker: %s", _RERANKER_MODEL)
+        _reranker = CrossEncoder(_RERANKER_MODEL)
+    return _reranker
 
 
 def build_analyst_query(signals: List[FailureSignal], industry: Optional[str] = None) -> str:
@@ -29,24 +49,58 @@ def build_analyst_query(signals: List[FailureSignal], industry: Optional[str] = 
     )
 
 
+def _rerank(query_text: str, candidates: List[dict], top_k: int = 5) -> List[dict]:
+    """Re-score candidates with a cross-encoder and return top-k.
+
+    Two-stage retrieval:
+      Stage 1 (bi-encoder): ChromaDB's all-MiniLM-L6-v2 does fast ANN retrieval
+                             over the full collection. Cheap but noisy.
+      Stage 2 (cross-encoder): ms-marco-MiniLM-L-6-v2 jointly encodes (query, doc)
+                                for fine-grained relevance scoring. Expensive but precise.
+
+    This is the standard retrieve-then-rerank pattern used in production search systems.
+    """
+    if not candidates:
+        return []
+
+    reranker = _get_reranker()
+    pairs = [(query_text, c["text"]) for c in candidates]
+    scores = reranker.predict(pairs)
+
+    for candidate, score in zip(candidates, scores):
+        candidate["rerank_score"] = float(score)
+
+    reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
+    log.debug("Rerank scores: %s", [(r["id"], r["rerank_score"]) for r in reranked[:top_k]])
+    return reranked[:top_k]
+
+
 def retrieve_case_studies(query_text: str, n_results: int = 5) -> List[dict]:
-    """Query ChromaDB and return ranked case study chunks.
+    """Two-stage retrieval: ChromaDB bi-encoder recall → cross-encoder rerank.
+
+    Stage 1: Over-fetch candidates from ChromaDB (bi-encoder ANN, fast but noisy).
+    Stage 2: Rerank with cross-encoder for precise relevance scoring.
 
     Uses the sections collection as primary (best semantic precision for case study
     problem/solution matching). Falls back to sentences collection if primary
     returns uniformly low similarity scores (all < 0.3).
 
-    Returns list of dicts: {id, text, metadata, similarity} sorted descending.
+    Returns list of dicts: {id, text, metadata, similarity, rerank_score} sorted
+    by rerank_score descending.
     """
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
-    results = _query_collection(client, PRIMARY_COLLECTION, query_text, n_results)
+    # Stage 1: over-fetch from bi-encoder
+    candidates = _query_collection(client, PRIMARY_COLLECTION, query_text, _RERANK_CANDIDATES)
 
     # Fallback: if no strong matches in sections, try sentences
-    if results and max(r["similarity"] for r in results) < 0.3:
-        fallback = _query_collection(client, FALLBACK_COLLECTION, query_text, n_results)
-        if fallback and max(r["similarity"] for r in fallback) > max(r["similarity"] for r in results):
-            results = fallback
+    if candidates and max(r["similarity"] for r in candidates) < 0.3:
+        fallback = _query_collection(client, FALLBACK_COLLECTION, query_text, _RERANK_CANDIDATES)
+        if fallback and max(r["similarity"] for r in fallback) > max(r["similarity"] for r in candidates):
+            candidates = fallback
+
+    # Stage 2: cross-encoder rerank
+    results = _rerank(query_text, candidates, top_k=n_results)
 
     return results
 
