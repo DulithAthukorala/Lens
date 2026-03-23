@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
-from tavily import TavilyClient
+from tavily import TavilyClient # brand seo check, blog/social activity signals, competitor research, google review data
 
 from src.models import FailureSignal, PipelineState, ResearcherOutput, SignalTier
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from src.agents.analyst import run_analyst
 from src.agents.researcher import run_researcher
+from src.agents.analyst import run_analyst
 from src.agents.validator import run_validator
 from src.agents.writer import run_writer
 from src.models import PipelineState
