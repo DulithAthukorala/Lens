@@ -73,11 +73,11 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.41.0
-uvloop==0.22.1
 watchfiles==1.1.1
 websocket-client==1.9.0
 websockets==16.0
 zipp==3.23.0
+pinecone>=5.0.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-groq>=0.2.0
