@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -76,6 +77,14 @@ def _rerank(query_text: str, candidates: List[dict], top_k: int = 5) -> List[dic
 
 
 def retrieve_case_studies(query_text: str, n_results: int = 5) -> List[dict]:
+    """Route to Pinecone (production) or ChromaDB (local) based on USE_PINECONE env flag."""
+    if os.environ.get("USE_PINECONE", "false").lower() == "true":
+        from src.rag.pinecone_pipeline import retrieve_case_studies as _pinecone_retrieve
+        return _pinecone_retrieve(query_text, n_results)
+    return _retrieve_chromadb(query_text, n_results)
+
+
+def _retrieve_chromadb(query_text: str, n_results: int = 5) -> List[dict]:
     """Two-stage retrieval: ChromaDB bi-encoder recall → cross-encoder rerank.
 
     Stage 1: Over-fetch candidates from ChromaDB (bi-encoder ANN, fast but noisy).
