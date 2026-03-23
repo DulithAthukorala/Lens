@@ -47,7 +47,10 @@ def chunk_fixed_tokens(text: str, chunk_tokens: int = 512, overlap_tokens: int =
         chunk_text = enc.decode(toks[start:end])
         chunks.append(Chunk(text=chunk_text, chunk_index=idx))
         idx += 1
-        start = end - overlap_tokens # move back by overlap for next chunk
+        next_start = end - overlap_tokens
+        if next_start <= start:  # document shorter than chunk_tokens — stop
+            break
+        start = next_start
     return chunks
 
 
